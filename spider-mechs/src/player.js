@@ -4,21 +4,35 @@ const _dir = new THREE.Vector3();
 const _aim = new THREE.Vector3();
 const _muzzle = new THREE.Vector3();
 const _target = new THREE.Vector3();
+const _toEnemy = new THREE.Vector3();
 
-/** Keyboard + pointer-lock mouse control, third-person chase camera, firing. */
+const TURN_SPEED = 2.4; // rad/s with A/D
+const MOUSE_SENS = 0.0024;
+const FIRE_KEYS = ['KeyF', 'ControlLeft', 'ControlRight', 'Enter', 'KeyJ'];
+const AIM_ASSIST_ANGLE = Math.cos(THREE.MathUtils.degToRad(16));
+const AIM_ASSIST_RANGE = 70;
+const BOLT_SPEED = 46;
+
+/**
+ * "Tank" style control: the mech has a heading, the camera always sits behind it.
+ * A/D (or the mouse) turn the mech and the camera together, W/S drive forward/back,
+ * Q/E strafe. Fire with the left mouse button or F / Ctrl / Enter; bolts get a mild
+ * aim assist toward the nearest enemy in front, so keyboard-only play works too.
+ */
 export class PlayerController {
-  constructor({ canvas, camera, spider, projectiles, terrain }) {
+  constructor({ canvas, camera, spider, projectiles, terrain, enemies = () => [] }) {
     this.canvas = canvas;
     this.camera = camera;
     this.spider = spider;
     this.projectiles = projectiles;
     this.terrain = terrain;
+    this.enemies = enemies; // () => Spider[]
     this.keys = new Set();
-    this.camYaw = 0;
-    this.camPitch = 0.42;
+    this.heading = spider.yaw;
+    this.camPitch = 0.38;
     this.locked = false;
     this.fallback = false; // mouse control without pointer lock (sandboxed iframes)
-    this.firing = false;
+    this.mouseFiring = false;
     this.fireCooldown = 0;
     this.fireRate = 0.14;
     this.enabled = true;
@@ -32,15 +46,19 @@ export class PlayerController {
         return;
       }
       this.keys.add(e.code);
-      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+      if (!this.locked && this.fallback === false && (e.code === 'Enter' || e.code === 'Space')) {
+        // keyboard-only start when nobody clicks
+        this._enterFallback();
+      }
+      if (/^(Key[WASDQEFJ]|Space|ShiftLeft|ShiftRight|ControlLeft|ControlRight|Arrow(Up|Down|Left|Right)|Enter)$/.test(e.code)) {
         e.preventDefault();
       }
     };
     this._onKeyUp = (e) => this.keys.delete(e.code);
     this._onMouseMove = (e) => {
       if (!this.locked) return;
-      this.camYaw -= e.movementX * 0.0024;
-      this.camPitch = THREE.MathUtils.clamp(this.camPitch + e.movementY * 0.0024, -0.15, 1.25);
+      this.heading -= e.movementX * MOUSE_SENS;
+      this.camPitch = THREE.MathUtils.clamp(this.camPitch + e.movementY * MOUSE_SENS, -0.2, 1.2);
     };
     this._onMouseDown = (e) => {
       if (e.button !== 0) return;
@@ -62,25 +80,30 @@ export class PlayerController {
         }, 500);
         return;
       }
-      this.firing = true;
+      this.mouseFiring = true;
     };
-    this._onLockError = () => this._enterFallback();
     this._onMouseUp = (e) => {
-      if (e.button === 0) this.firing = false;
+      if (e.button === 0) this.mouseFiring = false;
     };
     this._onLockChange = () => {
       this.locked = document.pointerLockElement === canvas;
-      if (!this.locked) this.firing = false;
+      if (!this.locked) this.mouseFiring = false;
       canvas.dispatchEvent(new CustomEvent('pointerlock', { detail: this.locked }));
+    };
+    this._onLockError = () => this._enterFallback();
+    this._onBlur = () => {
+      this.keys.clear();
+      this.mouseFiring = false;
     };
     window.addEventListener('keydown', this._onKeyDown);
     window.addEventListener('keyup', this._onKeyUp);
     window.addEventListener('mousemove', this._onMouseMove);
     canvas.addEventListener('mousedown', this._onMouseDown);
     window.addEventListener('mouseup', this._onMouseUp);
+    window.addEventListener('contextmenu', (e) => e.preventDefault());
     document.addEventListener('pointerlockchange', this._onLockChange);
     document.addEventListener('pointerlockerror', this._onLockError);
-    window.addEventListener('blur', () => this.keys.clear());
+    window.addEventListener('blur', this._onBlur);
   }
 
   _enterFallback() {
@@ -92,68 +115,145 @@ export class PlayerController {
   /** Fallback mode: emulate lock/unlock so the rest of the game sees the same events. */
   _setActive(on) {
     this.locked = on;
-    if (!on) this.firing = false;
+    if (!on) this.mouseFiring = false;
     this.canvas.dispatchEvent(new CustomEvent('pointerlock', { detail: on }));
   }
 
-  /** Movement vector in world space, relative to the camera yaw. */
-  _moveVector() {
-    const k = this.keys;
-    let f = 0;
-    let r = 0;
-    if (k.has('KeyW') || k.has('ArrowUp')) f += 1;
-    if (k.has('KeyS') || k.has('ArrowDown')) f -= 1;
-    if (k.has('KeyD') || k.has('ArrowRight')) r += 1;
-    if (k.has('KeyA') || k.has('ArrowLeft')) r -= 1;
-    const len = Math.hypot(f, r) || 1;
-    f /= len;
-    r /= len;
-    const s = Math.sin(this.camYaw);
-    const c = Math.cos(this.camYaw);
-    // camera forward = (s, 0, c), camera right = (c, 0, -s)
-    return { x: f * s + r * c, z: f * c - r * s };
+  get firing() {
+    if (this.mouseFiring) return true;
+    for (const k of FIRE_KEYS) if (this.keys.has(k)) return true;
+    return false;
   }
 
   update(dt) {
     const spider = this.spider;
-    const input = this.enabled && !spider.dead
-      ? {
-          move: this._moveVector(),
-          sprint: this.keys.has('ShiftLeft') || this.keys.has('ShiftRight'),
-          jump: this.keys.has('Space'),
-          faceYaw: this.camYaw,
-        }
-      : { move: { x: 0, z: 0 } };
+    const k = this.keys;
+    const active = this.enabled && !spider.dead;
+
+    let input = { move: { x: 0, z: 0 } };
+    if (active) {
+      // turning
+      let turn = 0;
+      if (k.has('KeyA') || k.has('ArrowLeft')) turn += 1;
+      if (k.has('KeyD') || k.has('ArrowRight')) turn -= 1;
+      this.heading += turn * TURN_SPEED * dt;
+      if (k.has('ArrowUp')) this.camPitch = Math.max(-0.2, this.camPitch - 1.2 * dt);
+      if (k.has('ArrowDown')) this.camPitch = Math.min(1.2, this.camPitch + 1.2 * dt);
+
+      // driving relative to the heading
+      let f = 0;
+      let r = 0;
+      if (k.has('KeyW')) f += 1;
+      if (k.has('KeyS')) f -= 1;
+      if (k.has('KeyE')) r += 1;
+      if (k.has('KeyQ')) r -= 1;
+      const len = Math.hypot(f, r) || 1;
+      f /= len;
+      r /= len;
+      const s = Math.sin(this.heading);
+      const c = Math.cos(this.heading);
+      input = {
+        move: { x: f * s + r * c, z: f * c - r * s },
+        sprint: k.has('ShiftLeft') || k.has('ShiftRight'),
+        jump: k.has('Space'),
+        yaw: this.heading,
+      };
+    }
     spider.update(dt, input);
 
-    // --- camera: third person, orbiting behind the mech
+    // --- camera: sits behind the mech, always looking along its heading
     const dist = 9.5;
-    const s = Math.sin(this.camYaw);
-    const c = Math.cos(this.camYaw);
+    const s = Math.sin(this.heading);
+    const c = Math.cos(this.heading);
     const cp = Math.cos(this.camPitch);
     const sp = Math.sin(this.camPitch);
     const p = spider.position;
-    _target.set(p.x, p.y + 1.0, p.z);
+    _target.set(p.x + s * 3, p.y + 1.0, p.z + c * 3);
     this.camPos.set(p.x - s * cp * dist, p.y + 1.2 + sp * dist, p.z - c * cp * dist);
     const ground = this.terrain.heightAt(this.camPos.x, this.camPos.z) + 1.2;
     if (this.camPos.y < ground) this.camPos.y = ground;
-    const k = 1 - Math.exp(-14 * dt);
-    this.camera.position.lerp(this.camPos, k);
-    this.camLook.lerp(_target, k);
+    const lerpK = 1 - Math.exp(-14 * dt);
+    this.camera.position.lerp(this.camPos, lerpK);
+    this.camLook.lerp(_target, lerpK);
     this.camera.lookAt(this.camLook);
 
     // --- firing
     this.fireCooldown -= dt;
-    if (this.firing && this.enabled && !spider.dead && this.fireCooldown <= 0) {
+    if (active && this.firing && this.fireCooldown <= 0) {
       this.fireCooldown = this.fireRate;
-      this.camera.getWorldDirection(_dir);
-      _aim.copy(this.camera.position).addScaledVector(_dir, 90);
       spider.forward(_muzzle).multiplyScalar(1.6);
       _muzzle.add(p).y += 0.55;
+      this._aimPoint(_aim, _muzzle);
       _dir.subVectors(_aim, _muzzle).normalize();
-      this.projectiles.spawn(_muzzle, _dir, spider, spider.color);
+      this._aimAssist(_muzzle, _dir);
+      this.projectiles.spawn(_muzzle, _dir, spider, spider.color, { speed: BOLT_SPEED });
       spider.body.velocity.x -= _dir.x * 0.6; // small recoil
       spider.body.velocity.z -= _dir.z * 0.6;
+    }
+  }
+
+  /**
+   * Where the crosshair points: the camera ray marched against the terrain. If the ray hits
+   * the ground too close (the camera looks down at the mech itself), shoot level instead.
+   */
+  _aimPoint(out, muzzle) {
+    this.camera.getWorldDirection(_dir);
+    const o = this.camera.position;
+    const maxT = 120;
+    let t = 0;
+    let hit = -1;
+    let prev = o.y - this.terrain.heightAt(o.x, o.z);
+    for (t = 1; t <= maxT; t += 1) {
+      const x = o.x + _dir.x * t;
+      const y = o.y + _dir.y * t;
+      const z = o.z + _dir.z * t;
+      const above = y - this.terrain.heightAt(x, z);
+      if (above <= 0) {
+        // linear refine between the last two samples
+        hit = t - 1 + prev / (prev - above);
+        break;
+      }
+      prev = above;
+    }
+    if (hit < 0) hit = maxT;
+    const camToMech = o.distanceTo(muzzle);
+    if (hit < camToMech + 2.5) {
+      // Looking at the ground right in front: fire straight ahead, level.
+      this.spider.forward(out).multiplyScalar(60).add(muzzle);
+      return out;
+    }
+    return out.copy(o).addScaledVector(_dir, hit);
+  }
+
+  /**
+   * Bend the shot toward the closest living enemy inside a narrow horizontal cone in front.
+   * Only the yaw is compared (the camera looks down from above, so pitch is unreliable);
+   * a hit takes the full 3D direction to the enemy.
+   */
+  _aimAssist(origin, dir) {
+    const hx = dir.x;
+    const hz = dir.z;
+    const hl = Math.hypot(hx, hz) || 1;
+    let best = null;
+    let bestDot = AIM_ASSIST_ANGLE;
+    for (const e of this.enemies()) {
+      if (e.dead) continue;
+      _toEnemy.copy(e.position).sub(origin);
+      const d = Math.hypot(_toEnemy.x, _toEnemy.z);
+      if (d > AIM_ASSIST_RANGE || d < 1) continue;
+      const dot = (_toEnemy.x * hx + _toEnemy.z * hz) / (d * hl);
+      if (dot > bestDot) {
+        bestDot = dot;
+        best = e;
+      }
+    }
+    if (best) {
+      // lead the target by its current velocity over the bolt's flight time
+      dir.copy(best.position).sub(origin);
+      const flight = dir.length() / BOLT_SPEED;
+      dir.addScaledVector(best.velocity, flight);
+      dir.y += 0.3;
+      dir.normalize();
     }
   }
 
@@ -165,5 +265,6 @@ export class PlayerController {
     window.removeEventListener('mouseup', this._onMouseUp);
     document.removeEventListener('pointerlockchange', this._onLockChange);
     document.removeEventListener('pointerlockerror', this._onLockError);
+    window.removeEventListener('blur', this._onBlur);
   }
 }

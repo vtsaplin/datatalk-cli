@@ -199,7 +199,7 @@ export class Spider {
   // ---------------------------------------------------------------- per-frame
   /**
    * @param {number} dt
-   * @param {{move:{x:number,z:number}, sprint?:boolean, jump?:boolean, faceYaw?:number}} input
+   * @param {{move:{x:number,z:number}, sprint?:boolean, jump?:boolean, yaw?:number, faceYaw?:number}} input
    */
   update(dt, input) {
     this.time += dt;
@@ -235,9 +235,10 @@ export class Spider {
     b.velocity.z += (mv.z * spd - b.velocity.z) * k;
 
     let targetYaw = this.yaw;
-    if (mlen > 0.1) targetYaw = Math.atan2(mv.x, mv.z);
+    if (input.yaw !== undefined) targetYaw = input.yaw; // explicit heading (player)
+    else if (mlen > 0.1) targetYaw = Math.atan2(mv.x, mv.z); // face the way we walk (bots)
     else if (input.faceYaw !== undefined) targetYaw = input.faceYaw;
-    this.yaw = lerpAngle(this.yaw, targetYaw, 1 - Math.exp(-7 * dt));
+    this.yaw = lerpAngle(this.yaw, targetYaw, 1 - Math.exp(-(input.yaw !== undefined ? 14 : 7) * dt));
 
     if (input.jump && this.grounded && this.jumpCooldown <= 0) {
       b.velocity.y = 9.5;

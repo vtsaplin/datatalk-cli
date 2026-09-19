@@ -174,10 +174,17 @@ function startGame() {
   game.won = false;
   game.time = 0;
   game.player = spawnPlayer();
-  game.playerCtl = new PlayerController({ canvas, camera, spider: game.player, projectiles, terrain });
+  game.playerCtl = new PlayerController({
+    canvas,
+    camera,
+    spider: game.player,
+    projectiles,
+    terrain,
+    enemies: () => game.enemies.map((e) => e.spider),
+  });
   game.enemies = spawnEnemies(ENEMY_COUNT);
   game.props = spawnProps(scene, world, terrain, game.rng);
-  showOverlay('SPIDER MECHS', 'Кликни по экрану, чтобы захватить мышь и начать');
+  showOverlay('SPIDER MECHS', 'Кликни по экрану или нажми Enter, чтобы начать');
 }
 
 function showOverlay(title, sub) {
