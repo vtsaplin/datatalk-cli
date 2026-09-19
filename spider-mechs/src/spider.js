@@ -68,7 +68,7 @@ export class Spider {
     this.yaw = 0;
     this.pitch = 0;
     this.roll = 0;
-    this.airTime = 0;
+    this.airborne = false;
     this.jumpCooldown = 0;
     this.grounded = true;
     this.flash = 0;
@@ -186,7 +186,11 @@ export class Spider {
     const ground = this.terrain.heightAt(b.position.x, b.position.z);
     const h = b.position.y - ground;
     this.grounded = h < RIDE_HEIGHT + 0.45;
-    if (this.airTime > 0) return;
+    if (this.airborne) {
+      // Stay ballistic until we are coming back down close to the ground.
+      if (b.velocity.y <= 0 && h < RIDE_HEIGHT * 1.3) this.airborne = false;
+      else return;
+    }
     if (h < RIDE_HEIGHT * 1.9) {
       const err = RIDE_HEIGHT - h;
       const K = 900;
@@ -204,7 +208,6 @@ export class Spider {
   update(dt, input) {
     this.time += dt;
     this.jumpCooldown -= dt;
-    this.airTime = Math.max(0, this.airTime - dt);
     if (this.flash > 0) {
       this.flash -= dt;
       const f = Math.max(0, this.flash) / 0.12;
@@ -240,16 +243,44 @@ export class Spider {
     else if (input.faceYaw !== undefined) targetYaw = input.faceYaw;
     this.yaw = lerpAngle(this.yaw, targetYaw, 1 - Math.exp(-(input.yaw !== undefined ? 14 : 7) * dt));
 
-    if (input.jump && this.grounded && this.jumpCooldown <= 0) {
-      b.velocity.y = 9.5;
-      this.airTime = 0.35;
-      this.jumpCooldown = 0.7;
+    if (input.jump && this.grounded && !this.airborne && this.jumpCooldown <= 0) {
+      b.velocity.y = 10.5;
+      this.airborne = true;
+      this.grounded = false;
+      this.jumpCooldown = 0.5;
     }
 
     this.velocity.set(b.velocity.x, 0, b.velocity.z);
 
-    // --- legs (tripod gait: the two groups strictly alternate so neither can starve the other)
+    // --- legs
     this._syncGroup();
+    if (!this.grounded) {
+      // In the air: fold the legs up under the body (no stepping).
+      for (const leg of this.legs) {
+        leg.stepping = false;
+        leg.needsStep = false;
+        this._homeWorld(leg, leg.target, 0, 0.7);
+        leg.target.y = Math.max(leg.target.y, this.body.position.y - 1.05);
+        leg.foot.lerp(leg.target, 1 - Math.exp(-12 * dt));
+      }
+    } else {
+      this._gait(dt);
+    }
+
+    // --- body tilt follows the feet
+    const fy = (i) => this.legs[i].foot.y;
+    const pitch = Math.atan2((fy(0) + fy(3)) / 2 - (fy(2) + fy(5)) / 2, 3.0);
+    const roll = Math.atan2((fy(3) + fy(4) + fy(5)) / 3 - (fy(0) + fy(1) + fy(2)) / 3, 4.3);
+    const tk = 1 - Math.exp(-6 * dt);
+    this.pitch += (THREE.MathUtils.clamp(pitch, -0.5, 0.5) - this.pitch) * tk;
+    this.roll += (THREE.MathUtils.clamp(roll, -0.5, 0.5) - this.roll) * tk;
+
+    this._syncGroup();
+    this._updateLegVisuals();
+  }
+
+  /** Tripod gait: the two leg groups strictly alternate so neither can starve the other. */
+  _gait(dt) {
     const stepping = [false, false];
     const wants = [false, false];
     for (const leg of this.legs) {
@@ -258,7 +289,8 @@ export class Spider {
       if (leg.stepping) stepping[grp] = true;
       else {
         const d = Math.hypot(leg.foot.x - leg.target.x, leg.foot.z - leg.target.z);
-        leg.needsStep = d > STEP_DIST || !this.grounded;
+        const dy = Math.abs(leg.foot.y - leg.target.y);
+        leg.needsStep = d > STEP_DIST || dy > 0.25;
         if (leg.needsStep) wants[grp] = true;
       }
     }
@@ -301,17 +333,6 @@ export class Spider {
         }
       }
     }
-
-    // --- body tilt follows the feet
-    const fy = (i) => this.legs[i].foot.y;
-    const pitch = Math.atan2((fy(0) + fy(3)) / 2 - (fy(2) + fy(5)) / 2, 3.0);
-    const roll = Math.atan2((fy(3) + fy(4) + fy(5)) / 3 - (fy(0) + fy(1) + fy(2)) / 3, 4.3);
-    const tk = 1 - Math.exp(-6 * dt);
-    this.pitch += (THREE.MathUtils.clamp(pitch, -0.5, 0.5) - this.pitch) * tk;
-    this.roll += (THREE.MathUtils.clamp(roll, -0.5, 0.5) - this.roll) * tk;
-
-    this._syncGroup();
-    this._updateLegVisuals();
   }
 
   _syncGroup() {
@@ -323,11 +344,11 @@ export class Spider {
   }
 
   /** World-space home target of a leg (yaw only, projected onto the terrain). */
-  _homeWorld(leg, out, lookahead) {
+  _homeWorld(leg, out, lookahead, scale = 1) {
     const s = Math.sin(this.yaw);
     const c = Math.cos(this.yaw);
-    const hx = leg.home.x * c + leg.home.z * s;
-    const hz = -leg.home.x * s + leg.home.z * c;
+    const hx = (leg.home.x * c + leg.home.z * s) * scale;
+    const hz = (-leg.home.x * s + leg.home.z * c) * scale;
     out.x = this.body.position.x + hx + this.velocity.x * lookahead;
     out.z = this.body.position.z + hz + this.velocity.z * lookahead;
     out.y = this.terrain.heightAt(out.x, out.z);
