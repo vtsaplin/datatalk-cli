@@ -17,6 +17,7 @@ export class PlayerController {
     this.camYaw = 0;
     this.camPitch = 0.42;
     this.locked = false;
+    this.fallback = false; // mouse control without pointer lock (sandboxed iframes)
     this.firing = false;
     this.fireCooldown = 0;
     this.fireRate = 0.14;
@@ -26,6 +27,10 @@ export class PlayerController {
 
     this._onKeyDown = (e) => {
       if (e.repeat) return;
+      if (e.code === 'Escape' && this.fallback && this.locked) {
+        this._setActive(false);
+        return;
+      }
       this.keys.add(e.code);
       if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
         e.preventDefault();
@@ -40,11 +45,26 @@ export class PlayerController {
     this._onMouseDown = (e) => {
       if (e.button !== 0) return;
       if (!this.locked) {
-        canvas.requestPointerLock?.();
+        if (this.fallback || !canvas.requestPointerLock) {
+          this._setActive(true);
+          return;
+        }
+        try {
+          const r = canvas.requestPointerLock();
+          if (r && r.catch) r.catch(() => this._enterFallback());
+        } catch (err) {
+          this._enterFallback();
+          return;
+        }
+        // Some sandboxes ignore the request silently: fall back to plain mouse control.
+        setTimeout(() => {
+          if (!this.locked && !this.fallback) this._enterFallback();
+        }, 500);
         return;
       }
       this.firing = true;
     };
+    this._onLockError = () => this._enterFallback();
     this._onMouseUp = (e) => {
       if (e.button === 0) this.firing = false;
     };
@@ -59,7 +79,21 @@ export class PlayerController {
     canvas.addEventListener('mousedown', this._onMouseDown);
     window.addEventListener('mouseup', this._onMouseUp);
     document.addEventListener('pointerlockchange', this._onLockChange);
+    document.addEventListener('pointerlockerror', this._onLockError);
     window.addEventListener('blur', () => this.keys.clear());
+  }
+
+  _enterFallback() {
+    if (this.fallback) return;
+    this.fallback = true;
+    this._setActive(true);
+  }
+
+  /** Fallback mode: emulate lock/unlock so the rest of the game sees the same events. */
+  _setActive(on) {
+    this.locked = on;
+    if (!on) this.firing = false;
+    this.canvas.dispatchEvent(new CustomEvent('pointerlock', { detail: on }));
   }
 
   /** Movement vector in world space, relative to the camera yaw. */
@@ -130,5 +164,6 @@ export class PlayerController {
     this.canvas.removeEventListener('mousedown', this._onMouseDown);
     window.removeEventListener('mouseup', this._onMouseUp);
     document.removeEventListener('pointerlockchange', this._onLockChange);
+    document.removeEventListener('pointerlockerror', this._onLockError);
   }
 }
