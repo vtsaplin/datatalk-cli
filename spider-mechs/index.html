@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Spider Mechs</title>
+  <style>
+    :root { color-scheme: dark; }
+    html, body { margin: 0; height: 100%; background: #070a16; overflow: hidden; font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; color: #cfe8ff; }
+    canvas#c { display: block; width: 100vw; height: 100vh; cursor: crosshair; }
+    #hud { position: fixed; inset: 0; pointer-events: none; }
+    .panel { position: absolute; padding: 10px 14px; background: rgba(7, 10, 22, .55); border: 1px solid rgba(0, 229, 255, .25); border-radius: 6px; backdrop-filter: blur(4px); font-size: 13px; letter-spacing: .04em; }
+    #status { left: 16px; bottom: 16px; min-width: 220px; }
+    #hp-bar { height: 8px; background: rgba(255,255,255,.08); border-radius: 4px; overflow: hidden; margin: 6px 0 4px; }
+    #hp-fill { height: 100%; width: 100%; background: #00e5ff; box-shadow: 0 0 10px #00e5ff; transition: width .15s; }
+    #enemy-panel { right: 16px; top: 16px; text-align: right; }
+    #enemy-panel b { font-size: 26px; color: #ff2d55; text-shadow: 0 0 12px #ff2d55; }
+    #fps { left: 16px; top: 16px; font-size: 11px; opacity: .6; }
+    #help { right: 16px; bottom: 16px; font-size: 11px; line-height: 1.6; opacity: .75; }
+    #help kbd { display: inline-block; padding: 0 5px; border: 1px solid rgba(255,255,255,.3); border-radius: 3px; font-size: 10px; margin-right: 2px; }
+    #crosshair { position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; }
+    #crosshair::before, #crosshair::after { content: ""; position: absolute; background: #00e5ff; box-shadow: 0 0 6px #00e5ff; }
+    #crosshair::before { left: 8px; top: 0; width: 2px; height: 18px; }
+    #crosshair::after { top: 8px; left: 0; height: 2px; width: 18px; }
+    #overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: radial-gradient(ellipse at center, rgba(7,10,22,.35), rgba(7,10,22,.85)); text-align: center; }
+    #overlay-title { font-size: 46px; letter-spacing: .25em; color: #00e5ff; text-shadow: 0 0 24px #00e5ff, 0 0 60px rgba(0,229,255,.5); margin: 0; }
+    #overlay-sub { font-size: 14px; opacity: .85; line-height: 1.7; }
+    .hidden { display: none !important; }
+    @media (max-width: 700px) { #help { display: none; } #overlay-title { font-size: 28px; } }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+      "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div id="hud">
+    <div id="fps" class="panel">-- fps</div>
+    <div id="enemy-panel" class="panel">ВРАГИ<br><b id="enemies">0</b></div>
+    <div id="status" class="panel">
+      БРОНЯ
+      <div id="hp-bar"><div id="hp-fill"></div></div>
+      <span id="hp-text">10 / 10</span>
+    </div>
+    <div id="help" class="panel">
+      <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> движение &nbsp; <kbd>Shift</kbd> бег &nbsp; <kbd>Space</kbd> прыжок<br>
+      <kbd>Мышь</kbd> камера &nbsp; <kbd>ЛКМ</kbd> огонь &nbsp; <kbd>Esc</kbd> пауза
+    </div>
+    <div id="crosshair" class="hidden"></div>
+    <div id="overlay">
+      <h1 id="overlay-title">SPIDER MECHS</h1>
+      <div id="overlay-sub">Загрузка…</div>
+    </div>
+  </div>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
